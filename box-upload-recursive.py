@@ -14,7 +14,7 @@ box_size_limit = 16106127360 # 15gb in bytes
 log_batch = 100000 # We're going to upload the log every X records
 
 d_invalid_char_replace= { "/" : "_", "?": "X", "<": "(", ">": ")", "\\": "#", ":":"_", "*": "-", "|": "!", "\"" :""}
-ignored_files_and_folders = ['.DS_Store', '.Trash', '.Spotlight-V100', '._'] # Mac hidden files
+ignored_files_and_folders = ['.DS_Store', '.Trash', '.Spotlight-V100', '._', '_gsdata_'] # Mac hidden files
 
 counts = {"files_uploaded": 0,
 	"files_existing": 0,
@@ -174,45 +174,71 @@ def upload_to_box(s_input_folder, parent_id):
 			folder_list.pop(max_level)
 									
 if __name__ == '__main__':
-	client, user = box_auth(uploader_id) 
-	
-	top_level_name = raw_input("Top-level folder to create on Box? ")
-	s_input_folder = raw_input("Path to local folder? ")
+	client, user = box_auth(uploader_id)
 	
 	ts = time.strftime('%m-%d-%Y-%I-%M-%S')
 	log_name = "upload_log_" + ts + ".txt"
 	log_folder = client.as_user(user).folder(log_file_id) 
-	log_path = os.path.dirname(os.path.abspath(__file__)) + os.sep + log_name
+	log_path = (os.sep).join((os.path.dirname(os.path.abspath(__file__)), "logs", log_name))
 	
-	upload_log = open(log_name, "a")
-	upload_log.write("Uploading from: " + s_input_folder + "\n"
-		+ "To top-level folder: " + top_level_name + "\n"
-		+ "Uploading as user ID: " + uploader_id + "\n\n")
-		
-	# Create the top-level folder
-	top_level_name = sanitize(top_level_name)
-	result, top_level_id = create_folder(s_input_folder, top_level_name, home_folder_id)
-	update_log(result)
+	try:
+		upload_log = open(log_path, "a")
+	except:
+		raise SystemExit("\nUnable to write logfile. Make sure you have a folder called 'logs' in the same path as this script.\n")
 	
-	# Perform the recursive upload
-	upload_to_box(s_input_folder, top_level_id) 
+	home_folder_id = raw_input("\nID for home folder on Box? ")
 	
-	all_counts = ("\nFiles uploaded: " + str(counts['files_uploaded'])
-		+ "\nExisting files: " + str(counts['files_existing'])
-		+ "\nFolders created: " + str(counts['folders_created'])
-		+ "\nExisting folders: " + str(counts['folders_existing'])
-		+ "\nSkipped: " + str(counts['skipped'])
-		+ "\nFiles larger than 15gb: " + str(counts['oversize'])
-		+ "\nErrors: " + str(counts['errors']))
+	try:
+		home_folder_name = client.as_user(user).folder(home_folder_id).get()['name']
+		print("\nHome folder set to: " + home_folder_name)
+	except:
+		raise SystemExit("\nInvalid home folder ID!\n")
 	
-	print(all_counts)
-	
-	upload_log.write(all_counts)
-		
-	upload_log.close()
+	s_input_folder = raw_input("\nPath to local folder? ")
 
-	# Upload the log file to Box
-	result = send_log_to_box(log_path, log_name)
-	
-	print(result)
-	
+	if os.path.isdir(s_input_folder):		
+
+		uploader_name = client.as_user(user).user().get()['name']
+					
+		top_level_name = raw_input("\nFolder to create on Box? ")
+		
+		try:
+			# Create the top-level folder
+			top_level_name = sanitize(top_level_name)
+			top_level_result, top_level_id = create_folder(s_input_folder, top_level_name, home_folder_id)
+		except:
+			raise SystemExit("\nUnable to create top-level folder!\n")
+			
+		summary = ("Uploading from: " + s_input_folder + "\n"
+			+ "To top-level folder: " + top_level_name + "\n"
+			+ "Inside home folder: " + home_folder_name + "\n"
+			+ "Uploading as user: " + uploader_name + "\n\n")
+			
+		print("\n" + summary)
+		upload_log.write(summary)
+		
+		update_log(top_level_result)
+
+		# Perform the recursive upload
+		upload_to_box(s_input_folder, top_level_id) 
+
+		all_counts = ("\nFiles uploaded: " + str(counts['files_uploaded'])
+			+ "\nExisting files: " + str(counts['files_existing'])
+			+ "\nFolders created: " + str(counts['folders_created'])
+			+ "\nExisting folders: " + str(counts['folders_existing'])
+			+ "\nSkipped: " + str(counts['skipped'])
+			+ "\nFiles larger than 15gb: " + str(counts['oversize'])
+			+ "\nErrors: " + str(counts['errors']))
+
+		print(all_counts)
+
+		upload_log.write(all_counts)
+
+		upload_log.close()
+
+		# Upload the log file to Box
+		result = send_log_to_box(log_path, log_name)
+
+		print(result)
+	else:
+		raise SystemExit("\nLocal folder does not exist!\n")
