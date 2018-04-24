@@ -5,6 +5,8 @@ import os
 import time
 import datetime
 
+from requests import ReadTimeout, ConnectTimeout, HTTPError, Timeout, ConnectionError
+
 from boxsdk import JWTAuth
 from boxsdk import Client
 from boxsdk.exception import BoxAPIException
@@ -49,17 +51,18 @@ def box_auth(user_id):
 	return (client, user)
 
 def update_log(result):
+	now = '['+ time.strftime('%Y-%m-%d %I:%M:%S') + '] '
 	if upload_log:
-		upload_log.write('['+ time.strftime('%Y-%M-%d %H:%M:%S') + '] ' + result + '\n')
+		upload_log.write(now + result + '\n')
 		
 		total_counts = sum(counts.values())
 		
-		if total_counts % log_batch == 0:
+		if (total_counts > 0) and (total_counts % log_batch == 0):
 			# Send the current log file to Box so that we get an in-progress view
 			log = send_log_to_box(log_path, log_name, 1)
 			print("Sent log file to Box.")
 		
-	print(result)
+	print(now + result)
 	
 def send_log_to_box(log_path, log_name, attempts):
 	try:
@@ -75,14 +78,14 @@ def send_log_to_box(log_path, log_name, attempts):
 		else:
 			# Some other error thrown
 			result =  "\nUnable to upload log: " + error.message
-	except ConnectionError:
-		if attempts <= max_attempts:
+	except ConnectionError as error:
+		if attempts < max_attempts:
 			attempts += 1
-			print("I'm having trouble connecting. Retry #" + attempts + " in " + time_to_wait + " seconds...")
+			print("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
 			time.sleep(time_to_wait)
-			send_log_to_box(log_path, log_name, attempts)
+			result = send_log_to_box(log_path, log_name, attempts)
 		else:
-			return("Maximum number of retries reached while trying to upload: " + log_name, False)
+			result = "Maximum number of retries reached while trying to upload: " + log_name
 
 	return(result)
 	
@@ -108,16 +111,18 @@ def create_folder(current_path, folder_name, parent_id, attempts):
 			return(result, existing_id)
 		else:
 			counts['errors'] += 1
-			return("Unable to create '" + folder_name + "': " + error.message, False)
-	except ConnectionError:
-		if attempts <= max_attempts:
+			return("ERROR: Unable to create '" + current_path + "': " + error.message, None)
+	except ConnectionError as error:			
+		if attempts < max_attempts:
 			attempts += 1
-			print("I'm having trouble connecting. Retry #" + attempts + " in " + time_to_wait + " seconds...")
+			update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
 			time.sleep(time_to_wait)
-			create_folder(current_path, folder_name, parent_id, attempts)
+			result, folder_id = create_folder(current_path, folder_name, parent_id, attempts)
 		else:
 			counts['errors'] += 1
-			return("Maximum number of retries reached while trying to create: " + folder_name, False)
+			result = "ERROR: Maximum number of retries reached while trying to create: " + current_path
+			folder_id = None
+		return(result, folder_id)
 
 def create_file(file_path, file_name, parent_id, attempts):
 	root_folder = client.as_user(user).folder(parent_id)
@@ -145,35 +150,39 @@ def create_file(file_path, file_name, parent_id, attempts):
 						result = "File '" + file_path + "' already existed as '" + update_file['name'] + "' but the size didn't match, so I updated it."
 					except BoxAPIException as error:
 						counts['errors'] += 1
-						result = "Unable to upload '"+ file_name + "': " + error.message
-					except ConnectionError:
-						if attempts <= max_attempts:
+						result = "ERROR: Unable to upload '"+ file_name + "': " + error.message
+					except ConnectionError as error:
+						if attempts < max_attempts:
 							attempts += 1
-							print("I'm having trouble connecting. Retry #" + attempts + " in " + time_to_wait + " seconds...")
+							update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
 							time.sleep(time_to_wait)
-							create_file(file_path, file_name, parent_id, attempts)
+							result, file_id = create_file(file_path, file_name, parent_id, attempts)
 						else:
 							counts['errors'] += 1
-							return("Maximum number of retries reached while trying to create: " + file_name, False)
+							result = "ERROR: Maximum number of retries reached while trying to create: " + file_path
+							file_id = None
+						return(result, file_id)
 
 				return(result, existing_id)
 			else:
 				counts['errors'] += 1
-				return("Unable to create '" + file_name + "': " + error.message, False)
-		except ConnectionError:
-			if attempts <= max_attempts:
+				return("ERROR: Unable to create '" + file_name + "': " + error.message, None)
+		except ConnectionError as error:
+			if attempts < max_attempts:
 				attempts += 1
-				print("I'm having trouble connecting. Retry #" + attempts + " in " + time_to_wait + " seconds...")
+				update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
 				time.sleep(time_to_wait)
-				create_file(file_path, file_name, parent_id, attempts)
+				result, file_id = create_file(file_path, file_name, parent_id, attempts)
 			else:
 				counts['errors'] += 1
-				return("Maximum number of retries reached while trying to create: " + file_name, False)
+				result = "ERROR: Maximum number of retries reached while trying to create: " + file_path
+				file_id = None
+			return(result, file_id)
 			
 	else:
 		result = "File '" + file_path + "' is larger than 15gb."
 		counts['oversize'] += 1
-		return(result, False)
+		return(result, None)
 		
 def upload_to_box(s_input_folder, parent_id):
 	folder_list = {0: {s_input_folder: parent_id}} # we'll use this to track the IDs for folders on Box
@@ -182,35 +191,52 @@ def upload_to_box(s_input_folder, parent_id):
 		for name in directories:
 			current_path = os.path.join(root,name)
 			
-			if any(ignored in name for ignored in ignored_files_and_folders) or name.startswith('._'):
+			if name.startswith('._'):
+				ignored_files_and_folders.append(name)
+			
+			if any(ignored in current_path for ignored in ignored_files_and_folders):
 				result = "Folder '" + current_path + "' skipped."
 				counts['skipped'] += 1
 				update_log(result)
 			else:
 				parent_level = root.count(os.sep) - s_input_folder.count(os.sep)					
 				current_level = parent_level + 1
-				parent_id = folder_list[parent_level][root]
-				result, folder_id = create_folder(current_path, sanitize(name), parent_id, 1)
+				try:
+					parent_id = folder_list[parent_level][root]
+					result, folder_id = create_folder(current_path, sanitize(name), parent_id, 1)
+				except KeyError:
+					counts['errors'] += 1
+					result = "ERROR: I don't have an ID for this folder: " + root
+					folder_id = None
 				
-				if current_level in folder_list.keys():
-					folder_list[current_level].update({current_path: folder_id})
-				else:
-					folder_list[current_level] = {current_path: folder_id}
+				if folder_id is not None:
+					if current_level in folder_list.keys():
+						folder_list[current_level].update({current_path: folder_id})
+					else:
+						folder_list[current_level] = {current_path: folder_id}
 				
 				update_log(result)
 			
 		for name in files:
 			current_path = os.path.join(root,name)
 			
-			if any(ignored in name for ignored in ignored_files_and_folders) or name.startswith('._'):
+			if name.startswith('._'):
+				ignored_files_and_folders.append(name)
+			
+			if any(ignored in current_path for ignored in ignored_files_and_folders):
 				result = "File '" + current_path + "' skipped."
 				counts['skipped'] += 1
 				update_log(result)
 			else:
 				parent_level = root.count(os.sep) - s_input_folder.count(os.sep)
 				current_level = parent_level + 1
-				parent_id = folder_list[parent_level][root]
-				result, file_id = create_file(current_path, sanitize(name), parent_id, 1)
+				try:
+					parent_id = folder_list[parent_level][root]
+					result, file_id = create_file(current_path, sanitize(name), parent_id, 1)
+				except KeyError:
+					counts['errors'] += 1
+					result = "ERROR: I don't have a Parent ID for this file: " + name
+					file_id = None
 				
 				update_log(result)
 		
@@ -222,17 +248,18 @@ def upload_to_box(s_input_folder, parent_id):
 if __name__ == '__main__':
 	client, user = box_auth(uploader_id)
 	
-	start = time.time()
+	uploader_name = client.as_user(user).user().get()['name']
 	
-	ts = time.strftime('%Y-%M-%d-%I-%M-%S')
-	log_name = "upload_log_" + ts + ".txt"
+	ts = time.strftime('%Y%m%d_%I%M%S')
+	log_name = uploader_name.replace(" ", "_") + "_log_" + ts + ".txt"
 	log_folder = client.as_user(user).folder(log_file_id) 
 	log_path = (os.sep).join((os.path.dirname(os.path.abspath(__file__)), "logs", log_name))
 	
 	try:
 		upload_log = open(log_path, "a")
 	except:
-		raise SystemExit("\nUnable to write logfile. Make sure you have a folder called 'logs' in the same path as this script.\n")
+		raise SystemExit("\nERROR: Unable to write logfile. Make sure you have a folder called 'logs' in the same path as this script.\n")
+
 	
 	if "home_folder_id" not in globals():
 		home_folder_id = raw_input("\nID for home folder on Box? ")
@@ -241,24 +268,17 @@ if __name__ == '__main__':
 		home_folder_name = client.as_user(user).folder(home_folder_id).get()['name']
 		print("\nHome folder set to: " + home_folder_name)
 	except:
-		raise SystemExit("\nInvalid home folder ID!\n")
+		raise SystemExit("\nERROR: Invalid home folder ID!\n")
 	
 	if "s_input_folder" not in globals():
 		s_input_folder = raw_input("\nPath to local folder? ")
 
 	if os.path.isdir(s_input_folder):		
 
-		uploader_name = client.as_user(user).user().get()['name']
-					
 		if "top_level_name" not in globals():
 			top_level_name = raw_input("\nFolder to create on Box? ")
 		
-		try:
-			# Create the top-level folder
-			top_level_name = sanitize(top_level_name)
-			top_level_result, top_level_id = create_folder(s_input_folder, top_level_name, home_folder_id, 1)
-		except:
-			raise SystemExit("\nUnable to create top-level folder!\n")
+		start = time.time()
 			
 		summary = ("Uploading from: " + s_input_folder + "\n"
 			+ "To top-level folder: " + top_level_name + "\n"
@@ -268,11 +288,19 @@ if __name__ == '__main__':
 		print("\n" + summary)
 		upload_log.write(summary)
 		
+		try:
+			# Create the top-level folder
+			top_level_name = sanitize(top_level_name)
+			top_level_result, top_level_id = create_folder(s_input_folder, top_level_name, home_folder_id, 1)
+		except:
+			raise SystemExit("\nERROR: Unable to create top-level folder!\n")
+		
 		update_log(top_level_result)
 
 		# Perform the recursive upload
 		upload_to_box(s_input_folder, top_level_id) 
 
+		#Wrap everything up and finish off the log file
 		all_counts = ("\nFiles uploaded: " + str(counts['files_uploaded'])
 			+ "\nExisting files: " + str(counts['files_existing'])
 			+ "\nFolders created: " + str(counts['folders_created'])
@@ -282,11 +310,9 @@ if __name__ == '__main__':
 			+ "\nErrors: " + str(counts['errors']))
 
 		print(all_counts)
-
 		upload_log.write(all_counts)
 
 		elapsed = "\nTime elapsed: " + str(datetime.timedelta(seconds=(time.time() - start)))
-		
 		print(elapsed)
 		upload_log.write(elapsed)
 		
@@ -297,4 +323,4 @@ if __name__ == '__main__':
 
 		print(result)
 	else:
-		raise SystemExit("\nLocal folder does not exist!\n")
+		raise SystemExit("\nERROR: Local folder does not exist!\n")
