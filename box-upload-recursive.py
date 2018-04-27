@@ -67,17 +67,17 @@ def update_log(result):
 def send_log_to_box(log_path, log_name, attempts):
 	try:
 		upload_the_log = log_folder.upload(log_path, log_name, upload_using_accelerator=True)
-		result = "\nUploaded log file '" + log_name + "' to Box."
+		result = "\nUploaded log file '%s' to Box." % log_name
 	except BoxAPIException as error:
 		if error.code == "item_name_in_use":
 			# The file already exists, so let's upload a new version
 			existing_id = error.context_info['conflicts']['id']
 			existing_file = client.as_user(user).file(existing_id).get()
 			update_file = existing_file.update_contents(log_path, upload_using_accelerator=True)
-			result = "\nUpdated log file '" + log_name + "' on Box."
+			result = "\nUpdated log file '%s' on Box." % log_name
 		else:
 			# Some other error thrown
-			result =  "\nUnable to upload log: " + error.message
+			result =  "\nUnable to upload log: %s" % error.message
 	except ConnectionError as error:
 		if attempts < max_attempts:
 			attempts += 1
@@ -85,7 +85,7 @@ def send_log_to_box(log_path, log_name, attempts):
 			time.sleep(time_to_wait)
 			result = send_log_to_box(log_path, log_name, attempts)
 		else:
-			result = "Maximum number of retries reached while trying to upload: " + log_name
+			result = "Maximum number of retries reached while trying to upload: %s" % log_name
 
 	return(result)
 	
@@ -99,30 +99,40 @@ def sanitize(sanitized_name):
 def create_folder(current_path, folder_name, parent_id, attempts):
 	try:
 		new_folder = client.as_user(user).folder(parent_id).create_subfolder(folder_name)
-		result = "Folder '" + current_path + "' successfully created as '" + new_folder['name'] + "'"
 		counts['folders_created'] += 1
+		result = "Folder '%s' successfully created as '%s'" % (current_path, folder_name)
 		return(result, new_folder['id'])
 	except BoxAPIException as error:
 		if error.code == "item_name_in_use":
-			existing_id = error.context_info['conflicts'][0]['id']
-			existing_folder = client.as_user(user).folder(existing_id).get()
-			result = "Folder '" + current_path + "' already exists as '" + existing_folder['name'] + "'"
-			counts['folders_existing'] += 1
-			return(result, existing_id)
+			try:
+				existing_id = error.context_info['conflicts'][0]['id']
+				existing_folder = client.as_user(user).folder(existing_id).get()
+				result = "Folder '%s' already exists as '%s'" % (current_path, folder_name)
+				counts['folders_existing'] += 1
+				return(result, existing_id)
+			except Exception as error:
+				counts['errors'] += 1
+				result = "UNCAUGHT ERROR: %s" % str(error)
+				return(result, existing_id)
 		else:
 			counts['errors'] += 1
-			return("ERROR: Unable to create '" + current_path + "': " + error.message, None)
+			result = "ERROR: Unable to create '%s': %s"  % (current_path, error.message)
+			return(result, None)
 	except ConnectionError as error:			
 		if attempts < max_attempts:
 			attempts += 1
-			update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
+			update_log("I'm having trouble connecting. Attempt #%s in %s seconds..." % (str(attempts), str(time_to_wait))) 
 			time.sleep(time_to_wait)
 			result, folder_id = create_folder(current_path, folder_name, parent_id, attempts)
 		else:
 			counts['errors'] += 1
-			result = "ERROR: Maximum number of retries reached while trying to create: " + current_path
+			result = "ERROR: Maximum number of retries reached while trying to create: %s" % current_path
 			folder_id = None
 		return(result, folder_id)
+	except Exception as error:
+		counts['errors'] += 1
+		result = "UNCAUGHT ERROR: %s" % str(error)
+		return(result, new_folder['id'])
 
 def create_file(file_path, file_name, parent_id, attempts):
 	root_folder = client.as_user(user).folder(parent_id)
@@ -130,8 +140,8 @@ def create_file(file_path, file_name, parent_id, attempts):
 	if file_size_local <= box_size_limit:
 		try:
 			a_file = root_folder.upload(file_path, file_name, upload_using_accelerator=True)
-			result = "File '" + file_path + "' successfully created as '" + a_file['name'] + "'"
 			counts['files_uploaded'] += 1
+			result = "File '%s' successfully created as '%s'" % (file_path, file_name)
 			return(result, a_file['id'])
 		except BoxAPIException as error:
 			if error.code == "item_name_in_use":
@@ -141,25 +151,28 @@ def create_file(file_path, file_name, parent_id, attempts):
 			
 				if file_size_box == file_size_local:
 					counts['files_existing'] += 1
-					result = "File '" + file_path + "' already exists as '" + existing_file['name'] + "'"
+					try:
+						result = "File '%s' already exists as '%s'" % (file_path, file_name)
+					except Exception as error:
+						result = "UNCAUGHT ERROR: %s" % str(error)
 				else:
 					try:
 						# There must be a partial upload, so let's upload a new version
 						update_file = existing_file.update_contents(file_path, upload_using_accelerator=True)
 						counts['files_existing'] += 1
-						result = "File '" + file_path + "' already existed as '" + update_file['name'] + "' but the size didn't match, so I updated it."
+						result = "File '%s' already existed as '%s' but the size didn't match, so I updated it." % (file_path, file_name)
 					except BoxAPIException as error:
 						counts['errors'] += 1
-						result = "ERROR: Unable to upload '"+ file_name + "': " + error.message
+						result = "ERROR: Unable to upload '%s': %s"  %(file_name, error.message)
 					except ConnectionError as error:
 						if attempts < max_attempts:
 							attempts += 1
-							update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
+							update_log("I'm having trouble connecting. Attempt #%s in %s seconds..." % (str(attempts), str(time_to_wait)))
 							time.sleep(time_to_wait)
 							result, file_id = create_file(file_path, file_name, parent_id, attempts)
 						else:
 							counts['errors'] += 1
-							result = "ERROR: Maximum number of retries reached while trying to create: " + file_path
+							result = "ERROR: Maximum number of retries reached while trying to create: %s" % file_path
 							file_id = None
 						return(result, file_id)
 
@@ -170,17 +183,22 @@ def create_file(file_path, file_name, parent_id, attempts):
 		except ConnectionError as error:
 			if attempts < max_attempts:
 				attempts += 1
-				update_log("I'm having trouble connecting. Attempt #" + str(attempts) + " in " + str(time_to_wait) + " seconds...")
+				update_log("I'm having trouble connecting. Attempt #%s in %s seconds..." % (str(attempts), str(time_to_wait)))
 				time.sleep(time_to_wait)
 				result, file_id = create_file(file_path, file_name, parent_id, attempts)
 			else:
 				counts['errors'] += 1
-				result = "ERROR: Maximum number of retries reached while trying to create: " + file_path
+				result = "ERROR: Maximum number of retries reached while trying to create: %s" % file_path
 				file_id = None
 			return(result, file_id)
+		except Exception as error:
+			counts['errors'] += 1
+			result = "UNCAUGHT ERROR: %s" % str(error)
+			return(result, a_file['id'])
+
 			
 	else:
-		result = "File '" + file_path + "' is larger than 15gb."
+		result = "File '%s' is larger than 15gb." % str(file_path)
 		counts['oversize'] += 1
 		return(result, None)
 		
@@ -195,7 +213,7 @@ def upload_to_box(s_input_folder, parent_id):
 				ignored_files_and_folders.append(name)
 			
 			if any(ignored in current_path for ignored in ignored_files_and_folders):
-				result = "Folder '" + current_path + "' skipped."
+				result = "Folder '%s' skipped." % current_path
 				counts['skipped'] += 1
 				update_log(result)
 			else:
@@ -206,7 +224,7 @@ def upload_to_box(s_input_folder, parent_id):
 					result, folder_id = create_folder(current_path, sanitize(name), parent_id, 1)
 				except KeyError:
 					counts['errors'] += 1
-					result = "ERROR: I don't have an ID for this folder: " + root
+					result = "ERROR: I don't have an ID for this folder: %s" % root
 					folder_id = None
 				
 				if folder_id is not None:
@@ -224,7 +242,7 @@ def upload_to_box(s_input_folder, parent_id):
 				ignored_files_and_folders.append(name)
 			
 			if any(ignored in current_path for ignored in ignored_files_and_folders):
-				result = "File '" + current_path + "' skipped."
+				result = "File '%s' skipped." % current_path
 				counts['skipped'] += 1
 				update_log(result)
 			else:
@@ -235,7 +253,7 @@ def upload_to_box(s_input_folder, parent_id):
 					result, file_id = create_file(current_path, sanitize(name), parent_id, 1)
 				except KeyError:
 					counts['errors'] += 1
-					result = "ERROR: I don't have a Parent ID for this file: " + name
+					result = "ERROR: I don't have a Parent ID for this file: %s" % name
 					file_id = None
 				
 				update_log(result)
@@ -249,17 +267,14 @@ if __name__ == '__main__':
 	client, user = box_auth(uploader_id)
 	
 	uploader_name = client.as_user(user).user().get()['name']
-	
-	ts = time.strftime('%Y%m%d_%I%M%S')
-	log_name = uploader_name.replace(" ", "_") + "_log_" + ts + ".txt"
 	log_folder = client.as_user(user).folder(log_file_id) 
-	log_path = (os.sep).join((os.path.dirname(os.path.abspath(__file__)), "logs", log_name))
+	logdir = (os.sep).join((os.path.dirname(os.path.abspath(__file__)), "logs"))
 	
-	try:
-		upload_log = open(log_path, "a")
-	except:
-		raise SystemExit("\nERROR: Unable to write logfile. Make sure you have a folder called 'logs' in the same path as this script.\n")
-
+	if not os.path.exists(logdir):
+		try:
+				os.makedirs(logdir)
+		except:
+				raise SystemExit("ERROR: Unable to create log folder!")
 	
 	if "home_folder_id" not in globals():
 		home_folder_id = raw_input("\nID for home folder on Box? ")
@@ -278,6 +293,8 @@ if __name__ == '__main__':
 		if "top_level_name" not in globals():
 			top_level_name = raw_input("\nFolder to create on Box? ")
 		
+		top_level_name = sanitize(top_level_name)
+					
 		start = time.time()
 			
 		summary = ("Uploading from: " + s_input_folder + "\n"
@@ -285,12 +302,20 @@ if __name__ == '__main__':
 			+ "Inside home folder: " + home_folder_name + "\n"
 			+ "Uploading as user: " + uploader_name + "\n\n")
 			
+		time_stamp = time.strftime('%Y-%m-%d %H%M%S')
+		log_name =  "%s - %s - %s.txt" % (uploader_name, top_level_name, time_stamp)
+		log_path = (os.sep).join((logdir, log_name))
+		
+		try:
+			upload_log = open(log_path, "a")
+		except:
+			raise SystemExit("ERROR: Unable to write log file!")
+			
 		print("\n" + summary)
 		upload_log.write(summary)
 		
 		try:
 			# Create the top-level folder
-			top_level_name = sanitize(top_level_name)
 			top_level_result, top_level_id = create_folder(s_input_folder, top_level_name, home_folder_id, 1)
 		except:
 			raise SystemExit("\nERROR: Unable to create top-level folder!\n")
