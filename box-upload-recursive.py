@@ -272,9 +272,9 @@ if __name__ == '__main__':
 	
 	if not os.path.exists(logdir):
 		try:
-				os.makedirs(logdir)
+			os.makedirs(logdir)
 		except:
-				raise SystemExit("ERROR: Unable to create log folder!")
+			raise SystemExit("ERROR: Unable to create log folder!")
 	
 	if "home_folder_id" not in globals():
 		home_folder_id = raw_input("\nID for home folder on Box? ")
