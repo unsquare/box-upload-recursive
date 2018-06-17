@@ -23,10 +23,9 @@ Then, plug those values into the script:
 
 I created a separate RSA key file from the JSON, so I had to specify the key file path.
 
-You'll also need to create an [App User][3] and grant them access to the folder where you want the script to upload files:
+You'll also need to create one or more [App User(s)][3] and grant them access to the folder where you want the script to upload files.
 
-	uploader_id = 'APP_USER_ID_HERE' # ID for the app user account used for the upload
-	home_folder_id = 'HOME_FOLDER_ID_HERE' # ID for the overall parent folder where you're uploading
+	app_users = {'1':'APP_USER_ID_HERE', '2':'APP_USER_ID_HERE', '3':'APP_USER_ID_HERE'} # Add as many app users as you want here
 
 The script also uploads a log file to Box at intervals, so you'll need to specify an ID for that folder and grant your App User access:
 
