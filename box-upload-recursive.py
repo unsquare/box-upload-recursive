@@ -11,13 +11,15 @@ from boxsdk import JWTAuth
 from boxsdk import Client
 from boxsdk.exception import BoxAPIException
 
-uploader_id = 'APP_USER_ID_HERE' # ID for the app user account used for the upload
-log_file_id = 'LOG_FOLDER_ID_HERE' # ID for the folder where you want to store log files
+app_users = {'1':'APP_USER_ID_HERE', '2':'APP_USER_ID_HERE', '3':'APP_USER_ID_HERE'} # Add as many app users as you want here
+log_file_id = 'LOG_FOLDER_ID_HERE' # ID for the Box Log Files folder
 box_size_limit = 16106127360 # 15gb in bytes
 log_batch = 5000 # Upload log every X records
 max_attempts = 10 # Maximum number of retries after a ConnectionError
 time_to_wait = 30 # Number of seconds to wait
 
+# Set the variables below if you want to hard-code your script
+# uploader_id = '' # ID for the app user that will perform the upload
 # home_folder_id = '' # ID for the overall parent folder where you are uploading
 # s_input_folder = '' # path to the local folder where your files are stored
 # top_level_name = '' # name of the folder to create on Box inside your home folder
@@ -113,7 +115,19 @@ def create_folder(current_path, folder_name, parent_id, attempts):
 			except Exception as error:
 				counts['errors'] += 1
 				result = "UNCAUGHT ERROR: %s" % str(error)
-				return(result, existing_id)
+				return(result, None)
+		elif error.code == "name_temporarily_reserved":
+			if attempts < max_attempts:
+				attempts += 1
+				update_log("Name temporarily reserved. Attempt #%s in %s seconds..." % (str(attempts), str(time_to_wait)))
+				time.sleep(time_to_wait)
+				result, folder_id = create_folder(current_path, folder_name, parent_id, attempts)
+			else:
+				counts['errors'] += 1
+				result = "ERROR: Maximum number of retries reached while trying to create: %s" % current_path
+				folder_id = None
+			return(result, folder_id)
+			
 		else:
 			counts['errors'] += 1
 			result = "ERROR: Unable to create '%s': %s"  % (current_path, error.message)
@@ -132,7 +146,7 @@ def create_folder(current_path, folder_name, parent_id, attempts):
 	except Exception as error:
 		counts['errors'] += 1
 		result = "UNCAUGHT ERROR: %s" % str(error)
-		return(result, new_folder['id'])
+		return(result, None)
 
 def create_file(file_path, file_name, parent_id, attempts):
 	root_folder = client.as_user(user).folder(parent_id)
@@ -177,9 +191,21 @@ def create_file(file_path, file_name, parent_id, attempts):
 						return(result, file_id)
 
 				return(result, existing_id)
+			elif error.code == "name_temporarily_reserved":
+				if attempts < max_attempts:
+					attempts += 1
+					update_log("Name temporarily reserved. Attempt #%s in %s seconds..." % (str(attempts), str(time_to_wait)))
+					time.sleep(time_to_wait)
+					result, file_id = create_file(file_path, file_name, parent_id, attempts)
+				else:
+					counts['errors'] += 1
+					result = "ERROR: Maximum number of retries reached while trying to create: %s" % file_path
+					file_id = None
+				return(result, folder_id)
 			else:
 				counts['errors'] += 1
-				return("ERROR: Unable to create '" + file_name + "': " + error.message, None)
+				result = "ERROR: Unable to create '%s': %s" % (file_name, error.message)
+				return(result, None)
 		except ConnectionError as error:
 			if attempts < max_attempts:
 				attempts += 1
@@ -194,9 +220,8 @@ def create_file(file_path, file_name, parent_id, attempts):
 		except Exception as error:
 			counts['errors'] += 1
 			result = "UNCAUGHT ERROR: %s" % str(error)
-			return(result, a_file['id'])
+			return(result, None)
 
-			
 	else:
 		result = "File '%s' is larger than 15gb." % str(file_path)
 		counts['oversize'] += 1
@@ -217,7 +242,7 @@ def upload_to_box(s_input_folder, parent_id):
 				counts['skipped'] += 1
 				update_log(result)
 			else:
-				parent_level = root.count(os.sep) - s_input_folder.count(os.sep)					
+				parent_level = root.count(os.sep) - s_input_folder.count(os.sep)
 				current_level = parent_level + 1
 				try:
 					parent_id = folder_list[parent_level][root]
@@ -264,18 +289,33 @@ def upload_to_box(s_input_folder, parent_id):
 			folder_list.pop(max_level)
 									
 if __name__ == '__main__':
-	client, user = box_auth(uploader_id)
+	if "uploader_id" not in globals():
+		if "app_users" in globals():
+			which_user = raw_input("\nUploader to use? (%s) " % ', '.join(sorted(app_users.keys())))
+			try:
+				uploader_id = app_users[which_user]
+			except:
+				raise SystemExit("\nERROR: Invalid uploader!")
+		else:
+			uploader_id = raw_input("\nUploader ID? ")
+
+	try:
+		client, user = box_auth(uploader_id)
+		uploader_name = client.as_user(user).user().get()['name']
+	except:
+		raise SystemExit("\nERROR: Invalid uploader ID!")
 	
-	uploader_name = client.as_user(user).user().get()['name']
-	log_folder = client.as_user(user).folder(log_file_id) 
+	print("\nUploader set to: %s" % uploader_name)
+	
+	log_folder = client.as_user(user).folder(log_file_id)
 	logdir = (os.sep).join((os.path.dirname(os.path.abspath(__file__)), "logs"))
 	
 	if not os.path.exists(logdir):
 		try:
 			os.makedirs(logdir)
 		except:
-			raise SystemExit("ERROR: Unable to create log folder!")
-	
+			raise SystemExit("\nERROR: Unable to create log folder!")
+			
 	if "home_folder_id" not in globals():
 		home_folder_id = raw_input("\nID for home folder on Box? ")
 	
